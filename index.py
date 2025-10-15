@@ -1,71 +1,144 @@
+import os
 import pygame
 from sys import exit
 
+#centering the window so it doesn't spawn offscreen
+os.environ['SDL_VIDEO_CENTERED'] = '1'
 pygame.init()
 
-# loading the background and getting the size of it
-bg = pygame.image.load("7.png")
-SCREEN_WIDTH, SCREEN_HEIGHT = bg.get_size()
+#temporary screen setup to load in the images
+screen = pygame.display.set_mode((1, 1))
 
-# set the display at twice the images size
-screen = pygame.display.set_mode((SCREEN_WIDTH*2, SCREEN_HEIGHT*2))
+#background layers from farthest to nearest, the farthest moves slower to give the parallax effect.
+bg_layers = [
+    ("Sky.png", 0.2),
+    ("DownLayer.png", 0.4),
+    ("MiddleLayer.png", 0.6),
+    ("Light.png", 0.8),
+    ("TopLayer.png", 1.0)
+]
+
+#loading and scale layers
+scale_factor = 3 #scaling up all my images by this much
+loaded_layers = [] #empty list currently to hold the processed background images, did it individually before and it was rlly slow
+
+#so for every file(filename -> "Sky.png") and factor(the speed at which the image will move basically)
+for filename, factor in bg_layers:
+    img = pygame.image.load(filename).convert_alpha() #loads the image with that name as a png and transpaernt
+    w, h = img.get_size() #gets the size of the image and then stores them in variables for width and height
+
+    """
+    resizes images: pygame.transform.scale(surface, (new_width, new_height))
+    so the new width is = int(w * scale_factor) which is just the integer version of the original times the scale i want
+    same for the height
+    """
+    img = pygame.transform.scale(img, (int(w * scale_factor), int(h * scale_factor)))
+    # adding the updated images to the empty tuple made earlier! could be done with a list or dictionary
+    #but done with tuple cause the structure wont be updated or anything
+    loaded_layers.append((img, factor))
+
+
+
+#screen size based on largest layer(all are the same size rn but incase i need to add another)
+SCREEN_WIDTH, SCREEN_HEIGHT = loaded_layers[0][0].get_size()
+#makes the screen at this size!
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 pygame.display.set_caption("Dax Sprite")
 
-# scaling it to twice the images size
-bg = pygame.transform.scale(bg, (SCREEN_WIDTH*2, SCREEN_HEIGHT*2)).convert()
+# function to extract the frames from the spritesheet
+def get_frames(sheet, num_frames, width, height):
+    frames = [] #empty list so it'll store each frame separately 
 
-# extracts the frames with transparancy instead of just filling in with black
-def get_frames(sheet, num_frames, width, height, scale=1):
-    frames = []
     for i in range(num_frames):
-        frame = pygame.Surface((width, height), pygame.SRCALPHA)  # transparent surface now
-        frame.blit(sheet, (0,0), (i*width, 0, width, height))
-        frame = pygame.transform.scale(frame, (width*scale, height*scale))
+        #creates nw surface for the frame and then makes it transparent
+        frame = pygame.Surface((width, height), pygame.SRCALPHA)
+        #draws unto surface based on each frame on the sheet, eg frame one starts at i(0)* width(32)
+        #then frame 2 would start at i(1)* width(32)
+        frame.blit(sheet, (0, 0), (i * width, 0, width, height))
+        #adds to frame list!
         frames.append(frame)
     return frames
 
-# load all sprite sheets
+#load sprite sheets
 idle_sheet_img = pygame.image.load("Pink_Monster_Idle_4.png").convert_alpha()
 run_sheet_img  = pygame.image.load("Pink_Monster_Run_6.png").convert_alpha()
 jump_sheet_img = pygame.image.load("Pink_Monster_Jump_8.png").convert_alpha()
+dust_sheet_img = pygame.image.load("Double_Jump_Dust_5.png").convert_alpha()
 
-# extracting the frames using how many of them there are and each size
-idle_frames = get_frames(idle_sheet_img, 4, 32, 32, 1)
-run_frames  = get_frames(run_sheet_img, 6, 32, 32, 1)
-jump_frames = get_frames(jump_sheet_img, 8, 32, 32, 1)
+#extract the frames based on how many frames there are etc
+idle_frames = get_frames(idle_sheet_img, 4, 32, 32)
+run_frames  = get_frames(run_sheet_img, 6, 32, 32)
+jump_frames = get_frames(jump_sheet_img, 8, 32, 32)
+dust_frames = get_frames(dust_sheet_img, 5, 32, 32)
 
-#properties
-x, y = 500, 500
+#the player properties
+x = SCREEN_WIDTH // 2 - 16
+y = 389
 y_velocity = 0
-gravity = 1
+gravity = 1.3
 ground_level = y
-speed = 5
+speed = 8        # was 10 moved to 8 to make a bit slower
 
-#animation and stuff
+
+#animation states
 frame_index = 0
 frame_timer = 0
-frame_delay = 5
-
-
-state = "idle"  # different states are: "idle", "run", "jump"
-# needs to record previous state
+frame_delay = 4  #faster animation
+state = "idle"
 prev_state = state
-direction = "right"  #different directions seeing as the sprite will need to b flipped "right" or "left"
-#makes sure it doesnt run too fast
+direction = "right"
+
+#double jump stuff
+can_double_jump = True
+jump_count = 0
+
+#dust animation controlling
+dust_active = False
+dust_index = 0
+dust_timer = 0
+dust_delay = 3
+dust_pos = (0, 0)
+
+#camera and zoom stuff
+zoom = 1.3
+camera_x = x - SCREEN_WIDTH / (2 * zoom)
+camera_y = y - SCREEN_HEIGHT / (2 * zoom)
+
+#prrecompute zoomed backgrounds (huge performance boost cause it was moving pretty slowly b4)
+#COME BACK TO THIS
+zoomed_layers = [(pygame.transform.rotozoom(img, 0, zoom), factor) for img, factor in loaded_layers]
+
 clock = pygame.time.Clock()
 
+#main loop
 while True:
+    moving = False
+
+    #the events
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             pygame.quit()
             exit()
+        #keydown things for the jump and double jump
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                if jump_count == 0:  #the first jump
+                    y_velocity = -18   # was -15 changed for higher jump
+                    jump_count = 1
+                elif jump_count == 1 and can_double_jump:  #the second jump
+                    y_velocity = -18
+                    jump_count = 2
+                    can_double_jump = False
 
-    # which key was pressed input
+                    #triggers dust
+                    dust_active = True
+                    dust_index = 0
+                    dust_timer = 0
+                    dust_pos = (x, y + 5)
+
+
+    #key for moving left or right
     keys = pygame.key.get_pressed()
-    #sprite is automatically still and therefore "idle"
-    moving = False
-
-    #moving left & right
     if keys[pygame.K_RIGHT]:
         x += speed
         direction = "right"
@@ -75,54 +148,86 @@ while True:
         direction = "left"
         moving = True
 
-    #jumps
-    if keys[pygame.K_UP] and y == ground_level:
-        y_velocity = -15  # how high this mf can jump
+    #gravity
+    y_velocity += gravity
+    y += y_velocity
 
-    # checks the state
-    if y < ground_level:  #means he's in the air
+    #ground collissions 
+    if y >= ground_level:
+        y = ground_level
+        y_velocity = 0
+        jump_count = 0
+        can_double_jump = True
+
+    #my state stuff, if y is less than the set ground level then he's jumping
+    if y < ground_level:
         state = "jump"
     elif moving:
         state = "run"
     else:
         state = "idle"
 
-    #gravity so he comes back down
-    y_velocity += gravity
-    y += y_velocity
-    if y >= ground_level:
-        y = ground_level
-        y_velocity = 0
-
-    #if state is changed will reset
+    #reset animation!
     if state != prev_state:
         frame_index = 0
         frame_timer = 0
     prev_state = state
 
-    # Select frames based on state
+    #selects the frames
     if state == "idle":
         frames = idle_frames
     elif state == "run":
         frames = run_frames
-    elif state == "jump":
+    else:
         frames = jump_frames
 
-    # Animate
+    #animating
     frame_timer += 1
     if frame_timer >= frame_delay:
         frame_timer = 0
         frame_index = (frame_index + 1) % len(frames)
-
     current_frame = frames[frame_index]
 
-    # Flip sprite if moving left
+    #flip the sprite if moving left
     if direction == "left":
         current_frame = pygame.transform.flip(current_frame, True, False)
 
-    # Draw background and sprite
-    screen.blit(bg, (0, 0))
-    screen.blit(current_frame, (x, y))
+    #camera following!!
+    camera_x = x - SCREEN_WIDTH / (2 * zoom)
+    camera_y = y - SCREEN_HEIGHT / (2 * zoom)
+
+    #clamping the  camera so it doesnt go out of bounds
+    base_bg = loaded_layers[0][0]
+    zoomed_width = base_bg.get_width() * zoom
+    zoomed_height = base_bg.get_height() * zoom
+    max_camera_x = max(0, zoomed_width - SCREEN_WIDTH)
+    max_camera_y = max(0, zoomed_height - SCREEN_HEIGHT)
+    camera_x = max(0, min(camera_x, max_camera_x / zoom))
+    camera_y = max(0, min(camera_y, max_camera_y / zoom))
+
+    #drawing the background!
+    screen.fill((0, 0, 0))
+    for img, factor in zoomed_layers:
+        offset_x = -camera_x * factor
+        offset_y = -camera_y * factor
+        screen.blit(img, (offset_x, offset_y))
+
+    #drawing the sprite
+    screen.blit(current_frame, ((x - camera_x) * zoom, (y - camera_y) * zoom))
+
+    #drawing the double jump dust!
+    if dust_active:
+        dust_timer += 1
+        if dust_timer >= dust_delay:
+            dust_timer = 0
+            if dust_index < len(dust_frames):
+                frame = dust_frames[dust_index]
+                screen.blit(frame, ((dust_pos[0] - camera_x) * zoom, (dust_pos[1] - camera_y) * zoom))
+                dust_index += 1
+            else:
+                dust_active = False
 
     pygame.display.flip()
     clock.tick(60)
+
+    #GOT LAZY WITH COMMENTING, WILL FIX UP AND CODE MORE TMR
